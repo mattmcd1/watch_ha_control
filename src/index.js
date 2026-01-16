@@ -48,7 +48,37 @@ app.post('/voice', async (req, res) => {
   }
 });
 
+async function fetchEntityList() {
+  const haUrl = process.env.HA_URL;
+  const haToken = process.env.HA_TOKEN;
+  const headers = {
+    'Authorization': `Bearer ${haToken}`,
+    'Content-Type': 'application/json'
+  };
+
+  const res = await fetch(`${haUrl}/api/states`, { headers });
+  if (!res.ok) throw new Error(`Failed to fetch entities: ${res.status}`);
+  const states = await res.json();
+
+  // Group by domain for cleaner output
+  const entities = states.map(s => ({
+    entity_id: s.entity_id,
+    state: s.state,
+    name: s.attributes?.friendly_name || s.entity_id
+  }));
+
+  // Filter to controllable/queryable domains
+  const relevantDomains = ['light', 'switch', 'sensor', 'climate', 'cover', 'lock', 'fan', 'scene'];
+  return entities
+    .filter(e => relevantDomains.some(d => e.entity_id.startsWith(d + '.')))
+    .slice(0, 100); // Limit for token efficiency
+}
+
 async function processVoiceCommand(userText) {
+  // Fetch entities upfront so Claude knows exact IDs
+  const entities = await fetchEntityList();
+  const entityList = entities.map(e => `${e.entity_id} (${e.name}): ${e.state}`).join('\n');
+
   const tools = [
     {
       name: 'get_entity_state',
@@ -93,29 +123,15 @@ async function processVoiceCommand(userText) {
         },
         required: ['domain', 'service']
       }
-    },
-    {
-      name: 'list_entities',
-      description: 'List available Home Assistant entities, optionally filtered by domain',
-      input_schema: {
-        type: 'object',
-        properties: {
-          domain: {
-            type: 'string',
-            description: 'Optional domain filter (e.g., light, sensor)'
-          }
-        }
-      }
     }
   ];
 
-  const systemPrompt = `You are a smart home voice assistant controlling Home Assistant. Keep responses very brief - they will be spoken aloud.
+  const systemPrompt = `You are a smart home voice assistant. Keep responses very brief - one sentence max.
 
-For commands like "turn on/off the X light", call the service directly using entity_id "light.X" (convert spaces to underscores, lowercase). Only use list_entities if you genuinely don't know what's available.
+AVAILABLE ENTITIES (use exact entity_id values):
+${entityList}
 
-For sensor queries, use get_entity_state with common patterns like "sensor.X_temperature".
-
-Be direct and concise. One short sentence responses.`;
+IMPORTANT: Use the EXACT entity_id from the list above. Lights may be under "switch." domain. Match by friendly name.`;
 
   let messages = [{ role: 'user', content: userText }];
 
@@ -217,20 +233,6 @@ async function executeHATool(toolName, input) {
       return { success: true, message: `Called ${input.domain}.${input.service}` };
     }
 
-    case 'list_entities': {
-      const res = await fetch(`${haUrl}/api/states`, { headers });
-      if (!res.ok) throw new Error(`Failed to list entities: ${res.status}`);
-      const states = await res.json();
-      let entities = states.map(s => ({
-        entity_id: s.entity_id,
-        state: s.state,
-        friendly_name: s.attributes?.friendly_name
-      }));
-      if (input.domain) {
-        entities = entities.filter(e => e.entity_id.startsWith(input.domain + '.'));
-      }
-      return entities.slice(0, 50);
-    }
 
     default:
       throw new Error(`Unknown tool: ${toolName}`);
