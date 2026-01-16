@@ -48,46 +48,27 @@ app.post('/voice', async (req, res) => {
   }
 });
 
-async function fetchEntityList() {
-  const haUrl = process.env.HA_URL;
-  const haToken = process.env.HA_TOKEN;
-  const headers = {
-    'Authorization': `Bearer ${haToken}`,
-    'Content-Type': 'application/json'
-  };
-
-  const res = await fetch(`${haUrl}/api/states`, { headers });
-  if (!res.ok) throw new Error(`Failed to fetch entities: ${res.status}`);
-  const states = await res.json();
-
-  // Group by domain for cleaner output
-  const entities = states.map(s => ({
-    entity_id: s.entity_id,
-    state: s.state,
-    name: s.attributes?.friendly_name || s.entity_id
-  }));
-
-  // Filter to controllable/queryable domains, prioritize controllable over sensors
-  const controllable = ['light', 'switch', 'climate', 'cover', 'lock', 'fan', 'scene'];
-  const queryable = ['sensor'];
-
-  const controllableEntities = entities.filter(e =>
-    controllable.some(d => e.entity_id.startsWith(d + '.'))
-  );
-  const sensorEntities = entities.filter(e =>
-    e.entity_id.startsWith('sensor.')
-  );
-
-  // Prioritize controllable entities, then add sensors up to limit
-  return [...controllableEntities, ...sensorEntities].slice(0, 100);
-}
-
 async function processVoiceCommand(userText) {
-  // Fetch entities upfront so Claude knows exact IDs
-  const entities = await fetchEntityList();
-  const entityList = entities.map(e => `${e.entity_id} (${e.name}): ${e.state}`).join('\n');
-
   const tools = [
+    {
+      name: 'find_entities',
+      description: 'Find Home Assistant entities by domain. ALWAYS call this first to get exact entity IDs before controlling devices or querying sensors.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          domain: {
+            type: 'string',
+            description: 'The domain to search: light, switch, sensor, climate, cover, lock, fan, or scene',
+            enum: ['light', 'switch', 'sensor', 'climate', 'cover', 'lock', 'fan', 'scene']
+          },
+          search: {
+            type: 'string',
+            description: 'Optional search term to filter by name (e.g., "bedroom", "pool", "temperature")'
+          }
+        },
+        required: ['domain']
+      }
+    },
     {
       name: 'get_entity_state',
       description: 'Get the current state of a Home Assistant entity',
@@ -136,10 +117,7 @@ async function processVoiceCommand(userText) {
 
   const systemPrompt = `You are a smart home voice assistant. Keep responses very brief - one sentence max.
 
-AVAILABLE ENTITIES (use exact entity_id values):
-${entityList}
-
-IMPORTANT: Use the EXACT entity_id from the list above. Lights may be under "switch." domain. Match by friendly name.`;
+IMPORTANT: ALWAYS call find_entities first to get exact entity IDs before controlling devices or querying sensors. Lights may be under "light" or "switch" domain - check both if needed.`;
 
   let messages = [{ role: 'user', content: userText }];
 
@@ -206,6 +184,31 @@ async function executeHATool(toolName, input) {
   };
 
   switch (toolName) {
+    case 'find_entities': {
+      const res = await fetch(`${haUrl}/api/states`, { headers });
+      if (!res.ok) throw new Error(`Failed to fetch entities: ${res.status}`);
+      const states = await res.json();
+
+      let entities = states
+        .filter(s => s.entity_id.startsWith(input.domain + '.'))
+        .map(s => ({
+          entity_id: s.entity_id,
+          name: s.attributes?.friendly_name || s.entity_id,
+          state: s.state
+        }));
+
+      // Filter by search term if provided
+      if (input.search) {
+        const searchLower = input.search.toLowerCase();
+        entities = entities.filter(e =>
+          e.name.toLowerCase().includes(searchLower) ||
+          e.entity_id.toLowerCase().includes(searchLower)
+        );
+      }
+
+      return entities.slice(0, 50);
+    }
+
     case 'get_entity_state': {
       const res = await fetch(`${haUrl}/api/states/${input.entity_id}`, { headers });
       if (!res.ok) throw new Error(`Failed to get state: ${res.status}`);
