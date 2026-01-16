@@ -67,11 +67,19 @@ async function fetchEntityList() {
     name: s.attributes?.friendly_name || s.entity_id
   }));
 
-  // Filter to controllable/queryable domains
-  const relevantDomains = ['light', 'switch', 'sensor', 'climate', 'cover', 'lock', 'fan', 'scene'];
-  return entities
-    .filter(e => relevantDomains.some(d => e.entity_id.startsWith(d + '.')))
-    .slice(0, 100); // Limit for token efficiency
+  // Filter to controllable/queryable domains, prioritize controllable over sensors
+  const controllable = ['light', 'switch', 'climate', 'cover', 'lock', 'fan', 'scene'];
+  const queryable = ['sensor'];
+
+  const controllableEntities = entities.filter(e =>
+    controllable.some(d => e.entity_id.startsWith(d + '.'))
+  );
+  const sensorEntities = entities.filter(e =>
+    e.entity_id.startsWith('sensor.')
+  );
+
+  // Prioritize controllable entities, then add sensors up to limit
+  return [...controllableEntities, ...sensorEntities].slice(0, 100);
 }
 
 async function processVoiceCommand(userText) {
