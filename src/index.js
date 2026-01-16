@@ -134,13 +134,23 @@ Be direct and concise. One short sentence responses.`;
 
     for (const toolUse of toolUseBlocks) {
       console.log(`Calling tool: ${toolUse.name}`, toolUse.input);
-      const result = await executeHATool(toolUse.name, toolUse.input);
-      console.log(`Tool result:`, result);
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result)
-      });
+      try {
+        const result = await executeHATool(toolUse.name, toolUse.input);
+        console.log(`Tool result:`, result);
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify(result)
+        });
+      } catch (error) {
+        console.log(`Tool error:`, error.message);
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ error: error.message }),
+          is_error: true
+        });
+      }
     }
 
     messages = [
