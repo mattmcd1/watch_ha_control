@@ -189,6 +189,14 @@ async function executeHATool(toolName, input) {
     }
 
     case 'call_service': {
+      // Validate entity exists before calling service
+      if (input.target?.entity_id) {
+        const checkRes = await fetch(`${haUrl}/api/states/${input.target.entity_id}`, { headers });
+        if (!checkRes.ok) {
+          throw new Error(`Entity '${input.target.entity_id}' not found. Use list_entities to find the correct entity ID.`);
+        }
+      }
+
       const serviceData = {
         ...input.data,
         ...(input.target?.entity_id && { entity_id: input.target.entity_id }),
