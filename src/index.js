@@ -109,21 +109,19 @@ async function processVoiceCommand(userText) {
     }
   ];
 
-  const systemPrompt = `You are a helpful smart home assistant. You control a Home Assistant instance.
+  const systemPrompt = `You are a smart home voice assistant controlling Home Assistant. Keep responses very brief - they will be spoken aloud.
 
-When the user asks you to do something:
-1. Use the available tools to query state or control devices
-2. Provide a brief, natural response confirming what you did
-3. If you need information, query it first then respond
+For commands like "turn on/off the X light", call the service directly using entity_id "light.X" (convert spaces to underscores, lowercase). Only use list_entities if you genuinely don't know what's available.
 
-Keep responses concise - they will be spoken aloud.
-Be conversational but efficient.`;
+For sensor queries, use get_entity_state with common patterns like "sensor.X_temperature".
+
+Be direct and concise. One short sentence responses.`;
 
   let messages = [{ role: 'user', content: userText }];
 
   let response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
+    model: 'claude-haiku-4-20250514',
+    max_tokens: 256,
     system: systemPrompt,
     tools,
     messages
@@ -152,8 +150,8 @@ Be conversational but efficient.`;
     ];
 
     response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: 'claude-haiku-4-20250514',
+      max_tokens: 256,
       system: systemPrompt,
       tools,
       messages
