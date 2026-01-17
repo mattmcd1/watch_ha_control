@@ -15,7 +15,17 @@ Apple Watch → Siri Shortcut → Middleware API → Claude + MCP → Home Assis
 
 ## Current State
 
-The project is in the planning phase. See `apple-watch-home-assistant-mcp-plan.md` for the complete implementation plan.
+The Node.js implementation is functional and deployed via Docker.
+
+## Common Commands
+
+```bash
+# Build and deploy
+sudo DOCKER_BUILDKIT=0 docker-compose up -d --build
+
+# View logs
+sudo docker-compose logs --tail=100
+```
 
 ## Implementation Options
 

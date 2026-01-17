@@ -67,7 +67,11 @@ npm start
 ### Docker Deployment
 
 ```bash
-docker compose up -d --build
+# Build and start the container
+sudo DOCKER_BUILDKIT=0 docker-compose up -d --build
+
+# View logs
+sudo docker-compose logs --tail=100
 ```
 
 ## API
