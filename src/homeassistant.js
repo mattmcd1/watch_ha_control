@@ -227,9 +227,13 @@ export function createHAClient({
     for (const domain of domains) {
       const entities = entitiesByDomain.get(domain) || [];
       for (const entity of entities) {
-        const score =
+        let score =
           scoreMatch({ queryTokens, entityTokens: entity._tokens, entityId: entity.entity_id }) +
           (entity.name.toLowerCase().includes(search.toLowerCase()) ? 2 : 0);
+        // Penalize entities with unknown/unavailable state
+        if (entity.state === 'unknown' || entity.state === 'unavailable') {
+          score -= 10;
+        }
         if (score > 0) candidates.push({ entity_id: entity.entity_id, score });
       }
     }
