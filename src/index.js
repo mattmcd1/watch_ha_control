@@ -268,7 +268,9 @@ async function processVoiceCommand({ userText, normalized }) {
 
   const systemPrompt = `You are a smart home voice assistant. Keep responses very brief - one sentence max.
 
-IMPORTANT: Use find_entities to discover exact entity IDs when needed before controlling devices or querying sensors. Lights may be under "light" or "switch" domain - check both if needed.`;
+IMPORTANT:
+- Use find_entities to discover exact entity IDs, then ALWAYS call get_entity_state to get current state (don't rely on state from find_entities).
+- Lights may be under "light" or "switch" domain - check both if needed.`;
 
   let messages = [{ role: 'user', content: userText }];
 
