@@ -20,6 +20,12 @@ Apple Watch → Siri Shortcut → Middleware API → Claude + Tools → Home Ass
 6. Claude generates a natural language response
 7. Siri speaks the response back to you
 
+### Performance Notes
+
+- The middleware caches HA entity/state data to avoid fetching `/api/states` on every request.
+- The middleware also caches “intent plans” (resolved HA tool calls) for repeated commands to reduce Claude round-trips.
+- A small fast-path handles common commands like “turn on/off …” and “pool temperature” without calling Claude.
+
 ## Setup
 
 ### Prerequisites
@@ -45,6 +51,11 @@ Required variables:
 Optional:
 - `PORT` - Server port (default: 3000)
 - `NODE_TLS_REJECT_UNAUTHORIZED` - Set to `0` if HA uses a self-signed certificate
+- `HA_STATES_TTL_MS` - Cache TTL for HA `/api/states` (default: 5000)
+- `HA_REQUEST_TIMEOUT_MS` - Timeout for HA HTTP requests (default: 6000)
+- `HA_WARMUP_ON_START` - Set to `0` to disable HA cache warmup on boot
+- `INTENT_CACHE_MAX` - Max cached voice intents (default: 500)
+- `INTENT_CACHE_TTL_MS` - TTL for cached voice intents (default: 7 days)
 
 ### Running Locally
 

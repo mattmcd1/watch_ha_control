@@ -1,6 +1,19 @@
 import express from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
+import { IntentCache } from './intentCache.js';
+import { normalizeUtterance } from './normalize.js';
+import { createHAClient } from './homeassistant.js';
+import {
+  buildPlanFromToolUses,
+  executePlan,
+  renderResponseFromToolResults,
+} from './voicePlan.js';
+
+const ENTITY_MATCH_SCORE = {
+  DEFAULT: 4,
+  POOL: 3,  // Pool entities often have shorter names
+};
 
 dotenv.config();
 
@@ -9,6 +22,20 @@ app.use(express.json());
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const ha = createHAClient({
+  haUrl: process.env.HA_URL,
+  haToken: process.env.HA_TOKEN,
+  statesTtlMs: Number(process.env.HA_STATES_TTL_MS) || 5000,
+  requestTimeoutMs: Number(process.env.HA_REQUEST_TIMEOUT_MS) || 6000,
+  warmupOnStart: process.env.HA_WARMUP_ON_START !== '0',
+});
+ha.warmup().catch(() => {});
+
+const intentCache = new IntentCache({
+  maxEntries: Number(process.env.INTENT_CACHE_MAX) || 500,
+  defaultTtlMs: Number(process.env.INTENT_CACHE_TTL_MS) || 7 * 24 * 60 * 60 * 1000,
 });
 
 // Authentication middleware
@@ -34,9 +61,39 @@ app.post('/voice', async (req, res) => {
       return res.status(400).json({ error: 'No text provided' });
     }
 
+    const startedAt = Date.now();
+    const normalized = normalizeUtterance(text);
     console.log(`Received command: ${text}`);
-    const response = await processVoiceCommand(text);
-    console.log(`Response: ${response}`);
+
+    const cachedPlan = intentCache.get(normalized);
+    if (cachedPlan) {
+      try {
+        const toolResults = await executePlan({ ha, plan: cachedPlan });
+        const response = renderResponseFromToolResults({ ha, toolResults });
+        console.log(`Response (cache): ${response} (${Date.now() - startedAt}ms)`);
+        return res.json({ response });
+      } catch (err) {
+        console.warn(`Cache plan failed for "${normalized}": ${err.message}`);
+        intentCache.delete(normalized);
+      }
+    }
+
+    const fastPlan = await tryFastPathPlan({ ha, normalized });
+    if (fastPlan) {
+      try {
+        const toolResults = await executePlan({ ha, plan: fastPlan });
+        const response = renderResponseFromToolResults({ ha, toolResults });
+        intentCache.set(normalized, fastPlan);
+        console.log(`Response (fast): ${response} (${Date.now() - startedAt}ms)`);
+        return res.json({ response });
+      } catch (err) {
+        console.warn(`Fast path failed for "${normalized}": ${err.message}`);
+        // Fall through to LLM
+      }
+    }
+
+    const response = await processVoiceCommand({ userText: text, normalized });
+    console.log(`Response (llm): ${response} (${Date.now() - startedAt}ms)`);
 
     res.json({ response });
 
@@ -48,11 +105,105 @@ app.post('/voice', async (req, res) => {
   }
 });
 
-async function processVoiceCommand(userText) {
+async function tryFastPathPlan({ ha, normalized }) {
+  if (!normalized) return null;
+
+  const poolTempRegexes = [
+    /\bpool\b.*\b(temp|temperature)\b/,
+    /\b(temp|temperature)\b.*\bpool\b/,
+  ];
+
+  if (poolTempRegexes.some(r => r.test(normalized))) {
+    const entityId =
+      (await ha.resolveEntityId({ domains: ['sensor'], search: 'pool temperature', minScore: ENTITY_MATCH_SCORE.POOL })) ||
+      (await ha.resolveEntityId({ domains: ['sensor'], search: 'pool temp', minScore: ENTITY_MATCH_SCORE.POOL }));
+
+    if (entityId) {
+      return { version: 1, toolCalls: [{ name: 'get_entity_state', input: { entity_id: entityId } }] };
+    }
+  }
+
+  const turnMatch = normalized.match(/\bturn\s+(on|off)\s+(.+)$/);
+  if (turnMatch) {
+    const desired = turnMatch[1];
+    const targetText = turnMatch[2].trim();
+    const minScore = targetText.includes('pool')
+      ? ENTITY_MATCH_SCORE.POOL
+      : ENTITY_MATCH_SCORE.DEFAULT;
+
+    const entityId = await ha.resolveEntityId({
+      domains: ['light', 'switch'],
+      search: targetText,
+      minScore,
+    });
+
+    if (entityId) {
+      const domain = entityId.split('.', 1)[0];
+      return {
+        version: 1,
+        toolCalls: [
+          {
+            name: 'call_service',
+            input: {
+              domain,
+              service: desired === 'on' ? 'turn_on' : 'turn_off',
+              target: { entity_id: entityId },
+            },
+          },
+        ],
+      };
+    }
+  }
+
+  const suffixMatch = normalized.match(/^(.+)\s+\b(on|off)\b$/);
+  if (suffixMatch) {
+    const targetText = suffixMatch[1].trim();
+    const desired = suffixMatch[2];
+
+    const looksLikeQuery =
+      targetText.startsWith('what ') ||
+      targetText.startsWith('whats ') ||
+      targetText.startsWith("what's ") ||
+      targetText.startsWith('is ') ||
+      targetText.startsWith('are ');
+
+    if (!looksLikeQuery && targetText.split(' ').length <= 6) {
+      const minScore = targetText.includes('pool')
+        ? ENTITY_MATCH_SCORE.POOL
+        : ENTITY_MATCH_SCORE.DEFAULT;
+      const entityId = await ha.resolveEntityId({
+        domains: ['light', 'switch'],
+        search: targetText,
+        minScore,
+      });
+
+      if (entityId) {
+        const domain = entityId.split('.', 1)[0];
+        return {
+          version: 1,
+          toolCalls: [
+            {
+              name: 'call_service',
+              input: {
+                domain,
+                service: desired === 'on' ? 'turn_on' : 'turn_off',
+                target: { entity_id: entityId },
+              },
+            },
+          ],
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+async function processVoiceCommand({ userText, normalized }) {
   const tools = [
     {
       name: 'find_entities',
-      description: 'Find Home Assistant entities by domain. ALWAYS call this first to get exact entity IDs before controlling devices or querying sensors.',
+      description: 'Find Home Assistant entities by domain to discover exact entity IDs.',
       input_schema: {
         type: 'object',
         properties: {
@@ -117,9 +268,11 @@ async function processVoiceCommand(userText) {
 
   const systemPrompt = `You are a smart home voice assistant. Keep responses very brief - one sentence max.
 
-IMPORTANT: ALWAYS call find_entities first to get exact entity IDs before controlling devices or querying sensors. Lights may be under "light" or "switch" domain - check both if needed.`;
+IMPORTANT: Use find_entities to discover exact entity IDs when needed before controlling devices or querying sensors. Lights may be under "light" or "switch" domain - check both if needed.`;
 
   let messages = [{ role: 'user', content: userText }];
+
+  const toolUsesSeen = [];
 
   let response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -135,17 +288,17 @@ IMPORTANT: ALWAYS call find_entities first to get exact entity IDs before contro
     const toolResults = [];
 
     for (const toolUse of toolUseBlocks) {
-      console.log(`Calling tool: ${toolUse.name}`, toolUse.input);
+      toolUsesSeen.push({ name: toolUse.name, input: toolUse.input });
+      console.log(`Calling tool: ${toolUse.name}`);
       try {
-        const result = await executeHATool(toolUse.name, toolUse.input);
-        console.log(`Tool result:`, result);
+        const result = await ha.executeTool(toolUse.name, toolUse.input);
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
           content: JSON.stringify(result)
         });
       } catch (error) {
-        console.log(`Tool error:`, error.message);
+        console.log(`Tool error: ${error.message}`);
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
@@ -171,83 +324,14 @@ IMPORTANT: ALWAYS call find_entities first to get exact entity IDs before contro
   }
 
   const textBlock = response.content.find(block => block.type === 'text');
-  return textBlock?.text || 'Done.';
-}
+  const responseText = textBlock?.text || 'Done.';
 
-async function executeHATool(toolName, input) {
-  const haUrl = process.env.HA_URL;
-  const haToken = process.env.HA_TOKEN;
-
-  const headers = {
-    'Authorization': `Bearer ${haToken}`,
-    'Content-Type': 'application/json'
-  };
-
-  switch (toolName) {
-    case 'find_entities': {
-      const res = await fetch(`${haUrl}/api/states`, { headers });
-      if (!res.ok) throw new Error(`Failed to fetch entities: ${res.status}`);
-      const states = await res.json();
-
-      let entities = states
-        .filter(s => s.entity_id.startsWith(input.domain + '.'))
-        .map(s => ({
-          entity_id: s.entity_id,
-          name: s.attributes?.friendly_name || s.entity_id,
-          state: s.state
-        }));
-
-      // Filter by search term if provided
-      if (input.search) {
-        const searchLower = input.search.toLowerCase();
-        entities = entities.filter(e =>
-          e.name.toLowerCase().includes(searchLower) ||
-          e.entity_id.toLowerCase().includes(searchLower)
-        );
-      }
-
-      return entities.slice(0, 50);
-    }
-
-    case 'get_entity_state': {
-      const res = await fetch(`${haUrl}/api/states/${input.entity_id}`, { headers });
-      if (!res.ok) throw new Error(`Failed to get state: ${res.status}`);
-      return await res.json();
-    }
-
-    case 'call_service': {
-      // Validate entity exists before calling service
-      if (input.target?.entity_id) {
-        const checkRes = await fetch(`${haUrl}/api/states/${input.target.entity_id}`, { headers });
-        if (!checkRes.ok) {
-          throw new Error(`Entity '${input.target.entity_id}' not found. Use list_entities to find the correct entity ID.`);
-        }
-      }
-
-      const serviceData = {
-        ...input.data,
-        ...(input.target?.entity_id && { entity_id: input.target.entity_id }),
-        ...(input.target?.area_id && { area_id: input.target.area_id })
-      };
-      const res = await fetch(
-        `${haUrl}/api/services/${input.domain}/${input.service}`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(serviceData)
-        }
-      );
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Failed to call service: ${res.status} - ${errorText}`);
-      }
-      return { success: true, message: `Called ${input.domain}.${input.service}` };
-    }
-
-
-    default:
-      throw new Error(`Unknown tool: ${toolName}`);
+  const plan = buildPlanFromToolUses(toolUsesSeen);
+  if (plan && normalized) {
+    intentCache.set(normalized, plan);
   }
+
+  return responseText;
 }
 
 const PORT = process.env.PORT || 3000;
