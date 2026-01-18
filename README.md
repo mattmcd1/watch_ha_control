@@ -44,7 +44,7 @@ cp .env.example .env
 
 Required variables:
 - `ANTHROPIC_API_KEY` - Your Anthropic API key
-- `HA_URL` - Home Assistant URL (e.g., `https://192.168.1.100:8123`)
+- `HA_URL` - Home Assistant URL (e.g., `https://192.168.1.100:9234`)
 - `HA_TOKEN` - Home Assistant long-lived access token
 - `API_KEY` - Secret key for authenticating Siri Shortcut requests
 

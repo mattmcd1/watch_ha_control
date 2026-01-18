@@ -45,7 +45,7 @@ Two middleware implementations are planned:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
-HA_URL=http://homeassistant.local:8123
+HA_URL=http://homeassistant.local:9234
 HA_TOKEN=your_long_lived_access_token
 PORT=3000
 API_KEY=your_secret_middleware_key

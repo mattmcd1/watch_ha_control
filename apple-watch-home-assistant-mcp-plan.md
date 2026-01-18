@@ -55,14 +55,14 @@ Apple Watch → Siri Shortcut → Middleware API → Claude + MCP → Home Assis
    - Recommended: lights, switches, sensors, locks, climate, covers
 
 4. **Note Your HA URL**
-   - Local: `http://homeassistant.local:8123` or `http://<IP>:8123`
+   - Local: `http://homeassistant.local:9234` or `http://<IP>:9234`
    - Remote: Your Nabu Casa URL or custom domain
    - MCP endpoint will be: `<HA_URL>/api/mcp`
 
 ### Verification
 ```bash
 # Test that MCP Server is accessible
-curl -X GET "http://your-ha-instance:8123/api/" \
+curl -X GET "http://your-ha-instance:9234/api/" \
   -H "Authorization: Bearer YOUR_TOKEN"
 # Should return: {"message": "API running."}
 ```
@@ -106,7 +106,7 @@ ha-voice-middleware/
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
 
 # Home Assistant
-HA_URL=http://homeassistant.local:8123
+HA_URL=http://homeassistant.local:9234
 HA_TOKEN=your_long_lived_access_token
 
 # Middleware
@@ -659,7 +659,7 @@ If you want the middleware accessible from anywhere:
 
 ```bash
 # Verify HA is accessible
-curl -X GET "http://your-ha:8123/api/states/light.living_room" \
+curl -X GET "http://your-ha:9234/api/states/light.living_room" \
   -H "Authorization: Bearer YOUR_HA_TOKEN"
 ```
 
